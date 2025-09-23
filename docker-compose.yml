@@ -1,0 +1,79 @@
+version: "3.9"
+
+services:
+  # Auth Service
+  auth-service:
+    build: ./backend/auth-service
+    container_name: auth-service
+    ports:
+      - "5001:4001"
+    environment:
+      - PORT=4001
+      - MONGO_URI=mongodb://mongo-service:27017/authdb
+    depends_on:
+      - mongo-service
+
+  # Chat Service
+  chat-service:
+    build: ./backend/chat-service
+    container_name: chat-service
+    ports:
+      - "5002:4002"
+    environment:
+      - PORT=4002
+      - REDIS_HOST=redis-service
+      - REDIS_PORT=6379
+    depends_on:
+      - redis-service
+
+  # File Service
+  file-service:
+    build: ./backend/file-service
+    container_name: file-service
+    ports:
+      - "5004:4004"
+    environment:
+      - PORT=4004
+      - UPLOAD_DIR=/data/uploads
+    volumes:
+      - file_data:/data/uploads
+
+  # Notification Service (Python FastAPI)
+  notification-service:
+    build: ./backend/notification-service
+    container_name: notification-service
+    ports:
+      - "5003:4003"
+
+  # Frontend Service (React)
+  frontend-service:
+    build: ./frontend/frontend-service
+    container_name: frontend-service
+    ports:
+      - "3000:80"
+    depends_on:
+      - auth-service
+      - chat-service
+      - file-service
+      - notification-service
+
+  # MongoDB
+  mongo-service:
+    image: mongo:6
+    container_name: mongo-service
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  # Redis
+  redis-service:
+    image: redis:7
+    container_name: redis-service
+    ports:
+      - "6379:6379"
+
+# Volumes
+volumes:
+  mongo_data:
+  file_data:
