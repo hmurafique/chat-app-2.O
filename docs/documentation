@@ -1,0 +1,340 @@
+Chat-App Deployment Guide (Version 2.0)
+Project Overview
+
+A full-stack chat application with multiple microservices:
+
+Backend Services (Node.js & Python)
+
+auth-service (Node.js + Express + MongoDB)
+
+chat-service (Node.js + Redis)
+
+file-service (Node.js + local/AWS storage)
+
+notification-service (Python + FastAPI)
+
+Frontend
+
+frontend-service (React)
+
+Nginx
+
+Host-based reverse proxy (for version 2)
+
+Containerized reverse proxy (for version 2)
+
+Versions
+
+Version 1: Without domain (basic local deployment)
+
+Version 2: With domain + SSL, two options: host nginx and containerized nginx
+
+VERSION 1: Without Domain
+Step 1: Project Structure
+chat-app-2.0/
+├── backend/
+│   ├── auth-service/
+│   ├── chat-service/
+│   ├── file-service/
+│   └── notification-service/
+├── frontend/
+│   └── frontend-service/
+└── docker-compose.yml
+
+
+Remarks:
+
+Simple deployment for local dev.
+
+No SSL, no domain, ports directly exposed.
+
+Step 2: Dockerfiles for Services
+
+Backend services: Node.js services use FROM node:18-alpine, Python service uses FROM python:3.12-alpine.
+
+Frontend: React build using node:18-alpine and serve static files with nginx:alpine.
+
+Each Dockerfile contains dependencies, build steps, and entrypoints.
+
+Remarks:
+
+Version 1 is fully containerized but without reverse proxy.
+
+Ports are mapped directly to host.
+
+Step 3: Docker Compose (Version 1)
+services:
+  frontend-service:
+    build: ./frontend/frontend-service
+    container_name: frontend-service
+    ports:
+      - "3000:80"
+
+  auth-service:
+    build: ./backend/auth-service
+    container_name: auth-service
+    environment:
+      - PORT=4001
+      - MONGO_URI=mongodb://mongo-service:27017/authdb
+    ports:
+      - "5001:4001"
+    depends_on:
+      - mongo-service
+
+  chat-service:
+    build: ./backend/chat-service
+    container_name: chat-service
+    environment:
+      - PORT=4002
+      - REDIS_HOST=redis-service
+    ports:
+      - "5002:4002"
+    depends_on:
+      - redis-service
+
+  file-service:
+    build: ./backend/file-service
+    container_name: file-service
+    environment:
+      - PORT=4004
+    ports:
+      - "5004:4004"
+
+  notification-service:
+    build: ./backend/notification-service
+    container_name: notification-service
+    environment:
+      - PORT=4003
+    ports:
+      - "5003:4003"
+
+  redis-service:
+    image: redis:7
+    container_name: redis-service
+    ports:
+      - "6379:6379"
+
+  mongo-service:
+    image: mongo:6
+    container_name: mongo-service
+    ports:
+      - "27017:27017"
+
+
+Remarks:
+
+Services directly accessible via host ports.
+
+Redis & MongoDB containers also included.
+
+Step 4: Run Version 1
+docker compose up -d --build
+docker ps -a
+
+
+Remarks:
+
+Local deployment ready.
+
+Test frontend: http://localhost:3000
+
+Test auth API: http://localhost:5001/api/auth
+
+VERSION 2: With Domain + SSL
+
+Goal: Use example.com, HTTPS, two nginx options.
+
+Step 1: Project Structure
+chat-app-2.0/
+├── backend/ (same as version 1)
+├── frontend/ (same as version 1)
+├── docker-compose.yml
+├── nginx/
+│   ├── host-nginx/          # Host nginx
+│   │   └── conf.d/default.conf
+│   └── container-nginx/     # Containerized nginx
+│       ├── Dockerfile
+│       └── conf.d/default.conf
+└── certs/
+    ├── example.com.crt
+    └── example.com.key
+
+
+Remarks:
+
+Certificates required (can be self-signed for dev).
+
+Structure supports both host & container nginx options.
+
+Step 2: SSL Certificates
+mkdir -p certs
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout certs/example.com.key \
+    -out certs/example.com.crt
+
+
+Remarks:
+
+For local dev: self-signed.
+
+Production: use valid CA-signed certificates.
+
+Step 3: Host Nginx Configuration
+
+nginx/host-nginx/conf.d/default.conf
+
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name example.com www.example.com;
+
+    ssl_certificate /etc/ssl/certs/example.com.crt;
+    ssl_certificate_key /etc/ssl/private/example.com.key;
+
+    location / {
+        proxy_pass http://localhost:3000;
+    }
+
+    location /api/auth/ {
+        proxy_pass http://localhost:5001/;
+    }
+
+    location /api/chat/ {
+        proxy_pass http://localhost:5002/;
+    }
+
+    location /api/file/ {
+        proxy_pass http://localhost:5004/;
+    }
+
+    location /api/notification/ {
+        proxy_pass http://localhost:5003/;
+    }
+}
+
+
+Remarks:
+
+HTTP → HTTPS redirect.
+
+Frontend + all APIs reverse proxied.
+
+Certificates mounted in /etc/ssl.
+
+Step 4: Host Nginx Deployment
+sudo apt install nginx -y
+sudo cp nginx/host-nginx/conf.d/default.conf /etc/nginx/sites-available/default
+sudo mkdir -p /etc/ssl/certs /etc/ssl/private
+sudo cp certs/example.com.crt /etc/ssl/certs/
+sudo cp certs/example.com.key /etc/ssl/private/
+sudo chmod 600 /etc/ssl/private/example.com.key
+sudo nginx -t
+sudo systemctl restart nginx
+sudo systemctl enable nginx
+
+
+Remarks:
+
+Frontend + APIs available at https://example.com.
+
+No extra container needed.
+
+Step 5: Containerized Nginx
+
+Dockerfile: nginx/container-nginx/Dockerfile
+
+FROM nginx:alpine
+COPY conf.d/default.conf /etc/nginx/conf.d/default.conf
+COPY ../../certs /etc/ssl/
+
+
+Nginx Config: nginx/container-nginx/conf.d/default.conf
+
+server {
+    listen 80;
+    server_name example.com www.example.com;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name example.com www.example.com;
+
+    ssl_certificate /etc/ssl/example.com.crt;
+    ssl_certificate_key /etc/ssl/example.com.key;
+
+    location / {
+        proxy_pass http://frontend-service:80;
+    }
+
+    location /api/auth/ {
+        proxy_pass http://auth-service:4001;
+    }
+    # Repeat for other APIs
+}
+
+
+Remarks:
+
+Docker network ke service names (frontend-service, auth-service) use hote hain.
+
+Fully dockerized, portable deployment.
+
+Step 6: Docker Compose (Containerized Nginx)
+services:
+  frontend-service: ...
+  auth-service: ...
+  chat-service: ...
+  file-service: ...
+  notification-service: ...
+  redis-service: ...
+  mongo-service: ...
+
+  nginx:
+    build: ./nginx/container-nginx
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - frontend-service
+      - auth-service
+
+
+Remarks:
+
+Reverse proxy + SSL handled inside container.
+
+All other services remain same.
+
+Step 7: Run Version 2
+docker compose up -d --build   # For containerized nginx
+# OR
+sudo systemctl restart nginx   # For host nginx
+
+
+Check:
+
+https://example.com → frontend
+
+https://example.com/api/auth/ → auth API
+
+All APIs accessible via HTTPS.
+
+Step 8: Remarks / Decision Table
+Option	Pros	Cons
+Host Nginx	No extra container, simpler setup	Less portable, manual config
+Containerized Nginx	Fully dockerized, portable, CI/CD ready	Slightly more complex
+
+✅ Conclusion:
+
+Version 1: Quick local deployment, no SSL, direct ports.
+
+Version 2: Full production-like deployment, domain + SSL, host or container nginx options.
+
+
